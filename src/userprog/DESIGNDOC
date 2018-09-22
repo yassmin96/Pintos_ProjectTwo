@@ -1,0 +1,346 @@
+		     +--------------------------+
+       	       	     |		CS 333		|
+		     | PROJECT 2: USER PROGRAMS	|
+		     | 	   DESIGN DOCUMENT     	|
+		     +--------------------------+
+ 
+---- GROUP ----
+ 
+>> Fill in the names and email addresses of your group members.
+ 
+Mira	Samir    <mirasamir1996@gmail.com>
+Passent Zaghloul <bassentzaghloul@gmail.com>
+Yassmin Barakat  <yassmindotcom@gmail.com>
+ 
+---- PRELIMINARIES ----
+ 
+>> If you have any preliminary comments on your submission, notes for the
+>> TAs, or extra credit, please give them here.
+ 
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+ 
+			   ARGUMENT PASSING
+			   ================
+ 
+---- DATA STRUCTURES ----
+ 
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+ 
+/** There is no additional data structures used **/
+ 
+ 
+---- ALGORITHMS ----
+ 
+>> A2: Briefly describe how you implemented argument parsing.  How do
+>> you arrange for the elements of argv[] to be in the right order?
+>> How do you avoid overflowing the stack page?
+ 
+/** We pushed the arguments into the stack as follows:-
+ 
+    1) Using strtok_r() to separate the arguments by spaces into separate 
+       strings then decreasing the stack pointer by the length of each string and
+       copying the string, which is null terminated, into the address of
+       the stack pointer by using memcpy() method.
+    2) Calculating the word align number of bytes in order to be multiple 
+       of the word size (4 bytes) by taking the modulo-4 of the total bytes 
+       count of the pushed arguments then subtracting it from 4 (word length)
+       and pushing word align number of zeros into the stack by using memset().
+    3) Pushing the null pointer sentinal (4 bytes of zeros) into the stack.
+    4) Pushing the addresses of the arguments from right to left by making
+       another pointer to point to the contents of stack pointer then moving 
+       upwards towards the stack end and pushing the address of the temp stack
+       into the stack then decrement the stack pointer by the length of the address
+       and incrementing the temp pointer by the length of the current string argument.
+    5) Pushing the address of argv[0] which is same address of stack pointer 
+       before decrementing it.
+    6) Pushing argc which is the number of the arguments by decrementing stack pointer
+       by integer size.
+    7) Pushing a fake return address (zero) by decrementing stack pointer by size of
+       void*.
+
+
+   As for avoiding overflowing the stack page, we decided not to check the esp pointer
+   but let it fail. We didn't count how many args are added or how much space is required.
+   Instead, we add args normally, and let it fail when there's an overflow, since a
+   page fault will occur in such case exiting the current running process page faulting
+   with -1 status.
+ 
+**/   
+ 
+---- RATIONALE ----
+ 
+>> A3: Why does Pintos implement strtok_r() but not strtok()?
+ 
+/**
+   Since strtok() saves static pointer for reuse in the next time, when you give NULL as 
+   the first parameter, so we just can't parse 2 strings in parallel.
+ 
+   Therefore Pintos implemented strtok_r() as it also gives you the pointer (save_ptr*), 
+   as out parameter (pointer to pointer) so there is no static pointer in the function and 
+   you can move from one string to another and back from multiple threads.
+**/
+ 
+>> A4: In Pintos, the kernel separates commands into a executable name
+>> and arguments.  In Unix-like systems, the shell does this
+>> separation.  Identify at least two advantages of the Unix approach.
+ 
+/**
+   1) In order to use the executable name for loading the file and checking whether it exist
+      or not.
+   2) In order to check whether the arguments are valid or not by checking if they are NULL 
+      pointers or accessing kernel space or not accessing the user program specified address space.
+   3) If an error occurs the kernel exits the process without performing the system call so it saves
+      time.
+**/ 
+ 
+ 
+			     SYSTEM CALLS
+			     ============
+ 
+---- DATA STRUCTURES ----
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', or
+>> enumeration.  Identify the purpose of each in 25 words or less.
+
+/* thread.h */
+
+ struct thread {
+
+	int fd_count;                         /* to count number of opened files per process */
+	struct list opened_files;             /* set of opened files per process */
+	struct semaphore loaded_successfully; /* binary semaphore to make parent wait on until his child loaded */
+	struct list child_process;            /* list of children for a process */
+        struct semaphore wait_child;          /* binary semaphore to make parent wait on child untile child signal him and exit */
+	struct thread *parent_thread;         /* parent for each process */
+        struct file* executable_file;         /* executable file of each process when loaded */
+        bool is_child_loaded_successfully;    /* boolean to check make parent wait untile his child loaded successfully */
+ };
+
+
+ 
+ /* struct for child process to use less memory storage
+    as when saving list of children of "child_thread" 
+    is better than using list of "thread" */
+     
+ struct child_thread{
+
+	bool parent_wait;              /* boolean to check if parent of this child was waiting or not to signal him */ 
+	int exit_state;                /* exite state of each process, initially is " -1 " */
+	struct list_elem child_elem;   /* list elem to be make a list of "child_thread" */
+	tid_t child_tid;               /* tid of original thread */
+	bool is_still_alive;           /* boolean to check if thread is "THREAD_DYING" or not */
+
+}; 
+
+
+
+/* file.h */   
+ 
+/* using this struct to could make a list of files for each process
+   as more than one process can have the same set of opened files */
+
+ struct file_process{
+
+   struct file* file;       
+   int fd;                  /* file descriptor for each file */
+   struct list_elem elem;   /* list elem to make list of files */
+
+};            
+
+
+
+
+>> B2: Describe how file descriptors are associated with open files.
+>> Are file descriptors unique within the entire OS or just within a
+>> single process?
+   
+/* every process has a unique list of opened files as each file is associated with
+   a file descriptor begining from "2" as "0" is reserved to read from keyboard and "1"
+   to write to console. and this file descriptor is incremented for every file opened per
+   process and a new "file_process" is created and a file decriptor is associated to him   
+   and added to the set of opened files to a process so to get a file from his file descriptor
+   by using the magic of "list_entry" to get file, so file descriptors are unique within
+   a single process. */
+
+
+ ---- ALGORITHMS ----
+ 
+>> B3: Describe your code for reading and writing user data from the
+>> kernel.
+
+/**
+  Reading and writing user data from the kernel uses both SYS_READ and
+  SYS_WRITE system calls. 
+	System Call: int write (int fd, const void *buffer, unsigned size);
+	System Call: int read (int fd, void *buffer, unsigned size);
+  
+  Writes/Reads size bytes from the file open as fd into/out of  buffer, 
+  returning number of bytes actually written/ read.
+
+  Arguments/ pointers to arguments are checked for their validity.
+  If a bad pointer referencing an argument is bad, a SYS_EXIT with
+  status -1 is called and process exits.
+
+  File descriptor decides whether reading/writing is 
+  from/to standard input/ standard output or a file. 
+
+**/
+ 
+>> B4: Suppose a system call causes a full page (4,096 bytes) of data
+>> to be copied from user space into the kernel.  What is the least
+>> and the greatest possible number of inspections of the page table
+>> (e.g. calls to pagedir_get_page()) that might result?  What about
+>> for a system call that only copies 2 bytes of data?  Is there room
+>> for improvement in these numbers, and how much?
+
+/**
+  ==> In case of a full page of 4,096 bytes of data to be copied:
+      -----------------------------------------------------------
+    The least number of possible inspections of the page table is only 
+    one inspection if the page/segment is at least 4,096 bytes in size.
+    The page size needs to be great enough to minimize page inspections.
+    
+    The greatest number can be up to 4,096 number of inspections, 
+    in such case each page/ segment is only one byte in size so an inspection 
+    is needed for each byte read.
+
+
+  ==> In case of a full page of 2 bytes of data to be copied:
+      -----------------------------------------------------------
+    The least number of possible inspections is the page table is only 
+    one inspection. 
+    The greatest number of inspections can be 2 (inspection/ byte).
+
+
+   No room for improvement.
+**/
+
+>> B5: Briefly describe your implementation of the "wait" system call
+>> and how it interacts with process termination.
+
+
+   /* when a parent need to waite for his child, first: we need to check 
+      if this child is a direct child for this parent, if not we return "-1"  
+      else we check if this child is terminated before or not, if terminated, parent
+      will not waite and return child exit state, if chid is not terminated 
+      we set that parent is waiting and make him wait on semaphore untile
+      this child is exit and signal him then return the exit state of this child 
+      but before we should first remove this child from children list of parent */
+
+
+     
+>> B6: Any access to user program memory at a user-specified address
+>> can fail due to a bad pointer value.  Such accesses must cause the
+>> process to be terminated.  System calls are fraught with such
+>> accesses, e.g. a "write" system call requires reading the system
+>> call number from the user stack, then each of the call's three
+>> arguments, then an arbitrary amount of user memory, and any of
+>> these can fail at any point.  This poses a design and
+>> error-handling problem: how do you best avoid obscuring the primary
+>> function of code in a morass of error-handling?  Furthermore, when
+>> an error is detected, how do you ensure that all temporarily
+>> allocated resources (locks, buffers, etc.) are freed?  In a few
+>> paragraphs, describe the strategy or strategies you adopted for
+>> managing these issues.  Give an example.
+
+
+/* first: we check if inter_frame pointer is valid or not and get system call enum
+   then we increment pointer until we read all argmnets passed and check for every pointer is valid or not 
+   as follow (check if it is not NULL, check if it is not in kernel space and check if it is within process page file).
+   then if the checked pointer value is also an address so it is needed to be checked again to avoid
+   bad pointer. then if it is not valid we call process_exit(), and terminate.
+   but if it's valid as a successful call to "write" after checking for all arguments of it and after
+   checking of bad pointer of buffer, then we check if file descriptor is one of process files or if it's 
+   for writing to console, if it wasn't we return ERROR.
+   to free resourses, when we call process_exit() we close all files for this process. */
+   
+   
+
+---- SYNCHRONIZATION ----
+
+>> B7: The "exec" system call returns -1 if loading the new executable
+>> fails, so it cannot return before the new executable has completed
+>> loading.  How does your code ensure this?  How is the load
+>> success/failure status passed back to the thread that calls "exec"?
+
+
+   /* when calling system call "exec", it calls "process_excute" which is return
+      process child pid, so it can return without check if executable files is loaded or 
+      not, so by using a binary semaphore "loaded_successfully" to make parent wait
+      and not return from "exec" until child load his excutable files then signal his parent,
+      and by using extra boolen to check if loaded successfuly or not, so if loaded successfuly, 
+      parent will return child pid from "exec" else return "-1" */
+    
+
+>> B8: Consider parent process P with child process C.  How do you
+>> ensure proper synchronization and avoid race conditions when P
+>> calls wait(C) before C exits?  After C exits?  How do you ensure
+>> that all resources are freed in each case?  How about when P
+>> terminates without waiting, before C exits?  After C exits?  Are
+>> there any special cases?
+
+      /* if P calls wait(C) before C exits:
+         P will be down on a binary semaphore until C exit, set exit state to C
+         that will be returned by P, and signal P then P removes C 
+         from his list.
+
+         if P calls wait(C) After C exits:
+         P will find C in his list but will know that it wasn't alive 
+         and will not wait, and returns C exit state. then remove C 
+         from his list.
+         
+         How do you ensure that all resources are freed:
+         at any time, any process calls exit, we close all files of
+         this process, and then allow writing to this process excutable file.
+
+         if P terminates without waiting before C exits:
+         as parent of C will be null, so when C calls to exit, we first check if
+         has parent is null or not, so if not there is no need to signal parent as it the same case
+         as if parent is not waiting.
+         
+         if P terminates without waiting After C exits:
+         threre is no problem or any race condition will happen 
+         as P is terminated and C is also terminated. */
+ 
+
+
+---- RATIONALE ----
+
+>> B9: Why did you choose to implement access to user memory from the
+>> kernel in the way that you did?
+
+>> B10: What advantages or disadvantages can you see to your design
+>> for file descriptors?
+
+>> B11: The default tid_t to pid_t mapping is the identity mapping.
+>> If you changed it, what advantages are there to your approach?
+
+
+			   SURVEY QUESTIONS
+			   ================
+ 
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the quarter.
+ 
+>> In your opinion, was this assignment, or any one of the three problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+ 
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+ 
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+ 
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+ 
+>> Any other comments?
